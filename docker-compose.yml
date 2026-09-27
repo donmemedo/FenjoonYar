@@ -1,0 +1,39 @@
+services:
+  api:
+    build: ./backend
+    container_name: cups_api
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      DATABASE_URL: sqlite:///./data/cups.db
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3044,http://127.0.0.1:3044}
+      EXPOSE_OTP: ${EXPOSE_OTP:-1}
+    volumes:
+      - api_data:/srv/data
+    ports:
+      - "8044:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8044}
+    container_name: cups_web
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://api:8000
+      NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8044}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3044:3044"
+
+volumes:
+  api_data:
