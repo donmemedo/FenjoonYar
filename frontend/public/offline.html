@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>کاپ‌یار | آفلاین</title>
+<style>
+:root{--bg:#fff7ef;--fg:#2a1a10;--muted:#7a6656;--brand:#ff6b1a;--on-brand:#1b1210;--card:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#0a0807;--fg:#f6ece4;--muted:#b3a091;--card:#17110d}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px;background:var(--bg);color:var(--fg);font:16px/1.7 Vazirmatn,Tahoma,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{width:100%;max-width:420px;text-align:center;background:var(--card);border-radius:28px;padding:36px 28px;box-shadow:0 10px 40px rgba(255,107,26,.12)}
+svg{width:56px;height:56px;color:var(--brand)}
+h1,h2{margin:16px 0 4px;font-size:1.35rem}
+p{margin:0;color:var(--muted)}
+.en{margin-top:20px;padding-top:20px;border-top:1px solid rgba(127,127,127,.2)}
+.en h2{font-size:1.1rem}
+.retry{display:inline-flex;align-items:center;margin-top:24px;min-height:48px;padding:0 32px;border-radius:999px;background:var(--brand);color:var(--on-brand);font-weight:700;text-decoration:none}
+.retry:active{transform:scale(.97)}
+.retry:focus-visible{outline:3px solid var(--fg);outline-offset:3px}
+</style>
+</head>
+<body>
+<main>
+<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 24h34v14a14 14 0 0 1-14 14h-6a14 14 0 0 1-14-14V24z"/><path d="M46 28h4a6 6 0 0 1 0 12h-4"/><path d="M22 8c-2 3 2 5 0 9M32 8c-2 3 2 5 0 9"/></svg>
+<h1>اتصال اینترنت برقرار نیست</h1>
+<p>اتصال خود را بررسی کنید و دوباره تلاش کنید.</p>
+<div class="en" lang="en" dir="ltr">
+<h2>You are offline</h2>
+<p>Check your connection and try again.</p>
+</div>
+<!-- Empty href = reload the page the user asked for (this file is served at that URL). No JavaScript, so it works under any CSP. -->
+<a class="retry" href="">تلاش دوباره · <span lang="en">Retry</span></a>
+</main>
+</body>
+</html>

@@ -30,10 +30,10 @@ export function ThemeToggle({ label }: { label: string }) {
       type="button"
       onClick={toggle}
       aria-label={label}
-      className="relative grid h-10 w-10 place-items-center rounded-full border border-line bg-surface2/60 text-ink transition hover:scale-105 hover:ring-2 hover:ring-brand/40 active:scale-95"
+      aria-pressed={dark}
+      className="press grid h-11 w-11 place-items-center rounded-full border border-line bg-surface2/60 text-ink hover:border-brand-ink/50"
     >
-      <span className="absolute inset-0 rounded-full bg-gradient-to-br from-brand/20 to-violet/20 opacity-0 transition hover:opacity-100" />
-      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
         {dark ? (
           <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" strokeLinecap="round" strokeLinejoin="round" />
         ) : (

@@ -1,51 +1,57 @@
+/** Browser: same origin (Next rewrites /api to FastAPI). Server: the internal API URL. */
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8044";
-
-const TOKEN_KEY = "cups.token";
-
-export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
-}
-
-export function setToken(token: string | null) {
-  if (typeof window === "undefined") return;
-  if (token) window.localStorage.setItem(TOKEN_KEY, token);
-  else window.localStorage.removeItem(TOKEN_KEY);
-  window.dispatchEvent(new Event("cups:auth"));
-}
+  typeof window === "undefined"
+    ? (process.env.API_INTERNAL_URL || "http://127.0.0.1:8044").replace(/\/$/, "")
+    : "";
 
 export class ApiError extends Error {
-  constructor(public code: string, public status: number) {
+  constructor(
+    public code: string,
+    public status: number,
+    /** Seconds to wait before retrying (429), from Retry-After or the body. */
+    public retryAfter?: number,
+  ) {
     super(code);
+    this.name = "ApiError";
   }
 }
 
+const UNSAFE = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
 export async function api<T>(
   path: string,
+  // ponytail: `auth` is accepted and ignored (the session is a cookie now) so old call sites compile.
   options: RequestInit & { auth?: boolean } = {},
 ): Promise<T> {
-  const { auth = true, headers, ...rest } = options;
-  const token = auth ? getToken() : null;
+  const { auth: _legacy, headers: extra, ...rest } = options;
+  const method = (rest.method ?? "GET").toUpperCase();
+  const headers = new Headers(extra);
+  // Content-Type only with a body: on a GET it is pointless and forces a preflight cross-origin.
+  if (rest.body != null && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (UNSAFE.has(method)) headers.set("X-Requested-With", "cups-web");
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...rest,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
-    },
+    method,
+    headers,
+    credentials: "same-origin",
     cache: "no-store",
   });
   if (!res.ok) {
     let code = `http_${res.status}`;
+    let retryAfter = Number(res.headers.get("Retry-After"));
     try {
       const body = await res.json();
       if (typeof body.detail === "string") code = body.detail;
+      if (!(retryAfter > 0) && typeof body.retry_after === "number") retryAfter = body.retry_after;
     } catch {
       /* keep the default code */
     }
-    if (res.status === 401) setToken(null);
-    throw new ApiError(code, res.status);
+    // /auth/me is how AuthProvider learns the session is gone; signalling there would loop.
+    if (res.status === 401 && path !== "/api/auth/me" && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("cups:auth"));
+    }
+    throw new ApiError(code, res.status, retryAfter > 0 ? retryAfter : undefined);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -95,6 +101,7 @@ export type Cafe = {
 export type Wallet = {
   cups_remaining: number;
   cups_used: number;
+  cups_expired: number;
   total_bought: number;
   expiring_soon: number;
   next_expiry: string | null;
@@ -105,13 +112,18 @@ export type Order = {
   id: number;
   cups: number;
   amount: number;
-  status: string;
+  /** "pending" + payment_required: nothing is credited until the gateway confirms. */
+  status: "paid" | "pending" | "failed";
   created_at: string;
   plan: { slug: string; fa: string; en: string };
+  payment_required?: boolean;
 };
+
+export type Drink = "espresso" | "latte" | "cappuccino" | "filter" | "cold";
 
 export type Redemption = {
   id: number;
+  /** Exactly 8 digits. */
   code: string;
   drink: string;
   status: "pending" | "confirmed" | "expired" | "cancelled";
@@ -139,4 +151,24 @@ export type Stats = {
   cities: number;
   members: number;
   cups_served: number;
+};
+
+/** POST /auth/request-otp. `dev_code` is a string only when the server runs DEMO_MODE=1. */
+export type OtpRequest = {
+  sent: boolean;
+  ttl_seconds: number;
+  resend_after_seconds: number;
+  dev_code: string | null;
+};
+
+/** POST /auth/verify-otp. `token` only appears for native clients (X-Client: native). */
+export type VerifyOtp = { user: User; token?: string };
+
+/** POST /partner/redemptions/confirm. No customer data by design. */
+export type PartnerConfirm = {
+  ok: boolean;
+  code: string;
+  drink: string;
+  settle_toman: number;
+  confirmed_at: string;
 };

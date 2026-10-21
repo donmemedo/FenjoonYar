@@ -1,185 +1,211 @@
-import random
-from datetime import datetime, timedelta
+import secrets
+from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlalchemy import case
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session, func, select, update
 
 from ..auth import current_user
-from ..db import get_session
-from ..models import Cafe, CreditBatch, Order, Plan, Redemption, User
+from ..config import settings
+from ..db import get_session, run
+from ..errors import ApiError
+from ..models import Cafe, CreditBatch, Order, Plan, Redemption, User, iso, utcnow
+from ..observability import audit
+from ..ratelimit import enforce
+from ..schemas import Drink, Slug
 
 router = APIRouter(prefix="/api", tags=["wallet"])
 
-SETTLEMENT_RATE = 0.72  # share of the cup price paid back to the cafe
+LIST_LIMIT = 100  # ponytail: newest 100 rows; add cursor pagination if histories grow
+CODE_RETRIES = 5
 
 
-def active_batches(session: Session, user_id: int) -> list[CreditBatch]:
-    now = datetime.utcnow()
-    batches = session.exec(
-        select(CreditBatch)
-        .where(CreditBatch.user_id == user_id)
-        .order_by(CreditBatch.expires_at)
-    ).all()
-    return [b for b in batches if b.expires_at > now and b.cups_used < b.cups_total]
+def usable_batches(user_id: int, now):
+    """Batches of this user with cups left that have not expired."""
+    return (
+        CreditBatch.user_id == user_id,
+        CreditBatch.cups_used < CreditBatch.cups_total,
+        CreditBatch.expires_at > now,
+    )
+
+
+def debit_one_cup(session: Session, user_id: int, now) -> bool:
+    """Take one cup from the oldest-expiring usable batch in ONE conditional UPDATE.
+
+    The subquery picks the batch and the outer WHERE re-checks the guard, so two concurrent
+    debits can never push cups_used past cups_total. Returns True when a cup was taken.
+    """
+    pick = (
+        select(CreditBatch.id).where(*usable_batches(user_id, now))
+        .order_by(CreditBatch.expires_at, CreditBatch.id).limit(1)
+        .correlate(None).scalar_subquery()
+    )
+    res = run(
+        session,
+        update(CreditBatch)
+        .where(CreditBatch.id == pick, CreditBatch.cups_used < CreditBatch.cups_total)
+        .values(cups_used=CreditBatch.cups_used + 1),
+    )
+    return res.rowcount == 1
 
 
 @router.get("/wallet")
 def wallet(user: User = Depends(current_user), session: Session = Depends(get_session)):
-    batches = active_batches(session, user.id)
-    remaining = sum(b.cups_total - b.cups_used for b in batches)
-    next_expiry = batches[0].expires_at.isoformat() + "Z" if batches else None
-    expiring_soon = sum(
-        b.cups_total - b.cups_used
-        for b in batches
-        if b.expires_at < datetime.utcnow() + timedelta(days=14)
-    )
-    orders = session.exec(
-        select(Order).where(Order.user_id == user.id).order_by(Order.id.desc())
+    now = utcnow()
+    soon = now + timedelta(days=14)
+    unused = CreditBatch.cups_total - CreditBatch.cups_used
+    live = CreditBatch.expires_at > now
+
+    def total(expr):
+        return func.coalesce(func.sum(expr), 0)
+
+    bought, used, remaining, expired, expiring = session.exec(
+        select(
+            total(CreditBatch.cups_total),
+            total(CreditBatch.cups_used),
+            total(case((live, unused), else_=0)),
+            total(case((~live, unused), else_=0)),
+            total(case((live & (CreditBatch.expires_at < soon), unused), else_=0)),
+        ).where(CreditBatch.user_id == user.id)
+    ).one()
+    batches = session.exec(
+        select(CreditBatch.id, CreditBatch.cups_total, CreditBatch.cups_used, CreditBatch.expires_at)
+        .where(*usable_batches(user.id, now)).order_by(CreditBatch.expires_at, CreditBatch.id)
     ).all()
-    total_bought = sum(o.cups for o in orders if o.status == "paid")
     return {
         "cups_remaining": remaining,
-        "cups_used": total_bought - remaining,
-        "total_bought": total_bought,
-        "expiring_soon": expiring_soon,
-        "next_expiry": next_expiry,
+        "cups_used": used,
+        "cups_expired": expired,
+        "total_bought": bought,
+        "expiring_soon": expiring,
+        "next_expiry": iso(batches[0].expires_at) if batches else None,
         "batches": [
-            {
-                "id": b.id,
-                "remaining": b.cups_total - b.cups_used,
-                "total": b.cups_total,
-                "expires_at": b.expires_at.isoformat() + "Z",
-            }
+            {"id": b.id, "remaining": b.cups_total - b.cups_used, "total": b.cups_total,
+             "expires_at": iso(b.expires_at)}
             for b in batches
         ],
     }
 
 
 class BuyIn(BaseModel):
-    plan_slug: str
+    plan_slug: Slug
+
+
+def order_dict(o: Order, p: Plan) -> dict:
+    return {
+        "id": o.id, "cups": o.cups, "amount": o.amount_toman, "status": o.status,
+        "created_at": iso(o.created_at), "plan": {"slug": p.slug, "fa": p.title_fa, "en": p.title_en},
+    }
 
 
 @router.post("/orders")
-def create_order(
-    body: BuyIn,
-    user: User = Depends(current_user),
-    session: Session = Depends(get_session),
-):
-    plan = session.exec(select(Plan).where(Plan.slug == body.plan_slug)).first()
-    if not plan:
-        raise HTTPException(404, "plan_not_found")
+def create_order(body: BuyIn, user: User = Depends(current_user), session: Session = Depends(get_session)):
+    enforce("orders", f"order:{user.id}", 10, 60)
+    plan = session.exec(select(Plan).where(Plan.slug == body.plan_slug, Plan.is_active == True)).first()  # noqa: E712
+    if plan is None:
+        raise ApiError(404, "plan_not_found")
+    paid = settings.demo_mode
     order = Order(
-        user_id=user.id, plan_id=plan.id, cups=plan.cups,
-        amount_toman=plan.price_toman, status="paid",
+        user_id=user.id, plan_id=plan.id, cups=plan.cups, amount_toman=plan.price_toman,
+        status="paid" if paid else "pending",
     )
     session.add(order)
-    session.commit()
-    session.refresh(order)
-    session.add(
-        CreditBatch(
+    session.flush()
+    if paid:
+        session.add(CreditBatch(
             user_id=user.id, order_id=order.id, cups_total=plan.cups,
-            expires_at=datetime.utcnow() + timedelta(days=plan.validity_days),
-        )
-    )
+            expires_at=utcnow() + timedelta(days=plan.validity_days),
+        ))
+    # Outside DEMO_MODE nothing is credited here. The payment gateway callback must, after
+    # verifying signature, order id and amount: flip the order pending -> paid with a conditional
+    # UPDATE (WHERE status='pending', check rowcount) and insert the CreditBatch in the same
+    # transaction, so a replayed callback credits cups exactly once.
     session.commit()
-    return {
-        "id": order.id, "cups": order.cups, "amount": order.amount_toman,
-        "status": order.status, "created_at": order.created_at.isoformat() + "Z",
-        "plan": {"slug": plan.slug, "fa": plan.title_fa, "en": plan.title_en},
-    }
+    audit("order_created", user_id=user.id, order_id=order.id, plan=plan.slug, status=order.status)
+    return {**order_dict(order, plan), "payment_required": not paid}
 
 
 @router.get("/orders")
 def list_orders(user: User = Depends(current_user), session: Session = Depends(get_session)):
-    orders = session.exec(
-        select(Order).where(Order.user_id == user.id).order_by(Order.id.desc())
+    rows = session.exec(
+        select(Order, Plan).join(Plan, Plan.id == Order.plan_id)
+        .where(Order.user_id == user.id).order_by(Order.id.desc()).limit(LIST_LIMIT)
     ).all()
-    plans = {p.id: p for p in session.exec(select(Plan)).all()}
-    return [
-        {
-            "id": o.id, "cups": o.cups, "amount": o.amount_toman, "status": o.status,
-            "created_at": o.created_at.isoformat() + "Z",
-            "plan": {
-                "slug": plans[o.plan_id].slug,
-                "fa": plans[o.plan_id].title_fa,
-                "en": plans[o.plan_id].title_en,
-            },
-        }
-        for o in orders
-    ]
+    return [order_dict(o, p) for o, p in rows]
 
 
 class RedeemIn(BaseModel):
-    cafe_slug: str | None = None
-    drink: str = "espresso"
+    cafe_slug: Slug | None = None
+    drink: Drink = "espresso"
 
 
-@router.post("/redemptions")
-def create_redemption(
-    body: RedeemIn,
-    user: User = Depends(current_user),
-    session: Session = Depends(get_session),
-):
-    batches = active_batches(session, user.id)
-    if not batches:
-        raise HTTPException(400, "no_cups_left")
-    cafe = None
-    if body.cafe_slug:
-        cafe = session.exec(select(Cafe).where(Cafe.slug == body.cafe_slug)).first()
-    red = Redemption(
-        user_id=user.id,
-        cafe_id=cafe.id if cafe else None,
-        code=f"{random.randint(100000, 999999)}",
-        drink=body.drink,
-    )
-    session.add(red)
-    session.commit()
-    session.refresh(red)
-    return redemption_dict(red, session)
-
-
-def redemption_dict(r: Redemption, session: Session) -> dict:
-    cafe = session.get(Cafe, r.cafe_id) if r.cafe_id else None
+def redemption_dict(r: Redemption, cafe: Cafe | None, now) -> dict:
+    # GET handlers never write: an overdue pending code is only reported as expired here;
+    # the maintenance job persists the change.
+    status = "expired" if r.status == "pending" and r.expires_at <= now else r.status
     return {
-        "id": r.id, "code": r.code, "drink": r.drink, "status": r.status,
-        "created_at": r.created_at.isoformat() + "Z",
-        "expires_at": r.expires_at.isoformat() + "Z",
-        "confirmed_at": r.confirmed_at.isoformat() + "Z" if r.confirmed_at else None,
+        "id": r.id, "code": r.code, "drink": r.drink, "status": status,
+        "created_at": iso(r.created_at), "expires_at": iso(r.expires_at),
+        "confirmed_at": iso(r.confirmed_at),
         "cafe": {"slug": cafe.slug, "fa": cafe.name_fa, "en": cafe.name_en} if cafe else None,
         "qr_payload": f"cups://redeem/{r.code}",
     }
 
 
+@router.post("/redemptions")
+def create_redemption(body: RedeemIn, user: User = Depends(current_user), session: Session = Depends(get_session)):
+    enforce("redemptions", f"redeem:{user.id}", 10, 60)
+    now = utcnow()
+    cafe = None
+    if body.cafe_slug:
+        cafe = session.exec(select(Cafe).where(Cafe.slug == body.cafe_slug)).first()
+        if cafe is None:
+            raise ApiError(404, "not_found")
+    if session.exec(select(CreditBatch.id).where(*usable_batches(user.id, now)).limit(1)).first() is None:
+        raise ApiError(400, "no_cups_left")
+    for _ in range(CODE_RETRIES):
+        # cancel this user's other pending codes and insert the new one in ONE transaction
+        run(
+            session,
+            update(Redemption).where(Redemption.user_id == user.id, Redemption.status == "pending")
+            .values(status="cancelled"),
+        )
+        red = Redemption(
+            user_id=user.id, cafe_id=cafe.id if cafe else None,
+            code=f"{secrets.randbelow(10**8):08d}", drink=body.drink,
+        )
+        session.add(red)
+        try:
+            session.commit()
+            break
+        except IntegrityError:  # unique code collision (or a concurrent create): try again
+            session.rollback()
+    else:
+        raise RuntimeError("could not allocate a unique redemption code")
+    audit("redemption_created", user_id=user.id, redemption_id=red.id, cafe=body.cafe_slug)
+    return redemption_dict(red, cafe, now)
+
+
 @router.get("/redemptions")
-def list_redemptions(
-    user: User = Depends(current_user), session: Session = Depends(get_session)
-):
+def list_redemptions(user: User = Depends(current_user), session: Session = Depends(get_session)):
+    now = utcnow()
     rows = session.exec(
-        select(Redemption).where(Redemption.user_id == user.id).order_by(Redemption.id.desc())
+        select(Redemption, Cafe).join(Cafe, Cafe.id == Redemption.cafe_id, isouter=True)
+        .where(Redemption.user_id == user.id).order_by(Redemption.id.desc()).limit(LIST_LIMIT)
     ).all()
-    now = datetime.utcnow()
-    for r in rows:
-        if r.status == "pending" and r.expires_at < now:
-            r.status = "expired"
-            session.add(r)
-    session.commit()
-    return [redemption_dict(r, session) for r in rows]
+    return [redemption_dict(r, c, now) for r, c in rows]
 
 
 @router.get("/redemptions/{code}")
-def get_redemption(
-    code: str,
-    user: User = Depends(current_user),
-    session: Session = Depends(get_session),
-):
-    r = session.exec(
-        select(Redemption).where(Redemption.code == code, Redemption.user_id == user.id)
-    ).first()
-    if not r:
-        raise HTTPException(404, "not_found")
-    if r.status == "pending" and r.expires_at < datetime.utcnow():
-        r.status = "expired"
-        session.add(r)
-        session.commit()
-    return redemption_dict(r, session)
+def get_redemption(code: str, user: User = Depends(current_user), session: Session = Depends(get_session)):
+    row = None
+    if len(code) == 8 and code.isascii() and code.isdecimal():
+        row = session.exec(
+            select(Redemption, Cafe).join(Cafe, Cafe.id == Redemption.cafe_id, isouter=True)
+            .where(Redemption.code == code, Redemption.user_id == user.id)
+        ).first()
+    if row is None:
+        raise ApiError(404, "not_found")
+    return redemption_dict(row[0], row[1], utcnow())

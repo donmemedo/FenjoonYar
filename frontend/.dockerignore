@@ -1,3 +1,7 @@
-node_modules
-.next
+.env*
+Dockerfile
+*.md
 .git
+.next
+node_modules
+coverage

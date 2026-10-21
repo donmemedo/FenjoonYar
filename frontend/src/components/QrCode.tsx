@@ -1,20 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import QRCode from "qrcode";
 
-export default function QrCode({ value, size = 220 }: { value: string; size?: number }) {
+/** `label` is the accessible name (the QR itself carries the same 8-digit code that is shown as text next to it). */
+export default function QrCode({ value, label, size = 220 }: { value: string; label: string; size?: number }) {
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
-    QRCode.toDataURL(value, {
-      width: size * 2,
-      margin: 1,
-      color: { dark: "#1b1210ff", light: "#ffffffff" },
-    })
+    // The encoder is ~25 KB: loaded only when a code is actually on screen, not in the page bundle.
+    import("qrcode")
+      .then((m) =>
+        m.toDataURL(value, { width: size * 2, margin: 1, color: { dark: "#1b1210ff", light: "#ffffffff" } }),
+      )
       .then((url) => alive && setSrc(url))
-      .catch(() => {});
+      .catch(() => {}); // the code is also shown as text, so a failed QR is not fatal
     return () => {
       alive = false;
     };
@@ -27,9 +27,9 @@ export default function QrCode({ value, size = 220 }: { value: string; size?: nu
     >
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt="QR" width={size} height={size} className="rounded-xl" />
+        <img src={src} alt={label} width={size} height={size} className="rounded-xl" />
       ) : (
-        <div className="h-full w-full animate-pulse rounded-xl bg-black/5" />
+        <div role="img" aria-label={label} aria-busy="true" className="h-full w-full rounded-xl bg-black/5" />
       )}
     </div>
   );

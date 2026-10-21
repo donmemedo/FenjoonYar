@@ -1,100 +1,110 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlalchemy import case
+from sqlmodel import Session, col, func, select, update
 
 from ..auth import current_partner
-from ..db import get_session
-from ..models import Cafe, Redemption, User
-from ..routers.wallet import SETTLEMENT_RATE, active_batches
+from ..config import settings
+from ..db import get_session, run
+from ..errors import ApiError
+from ..models import Cafe, Redemption, User, iso, utcnow
+from ..observability import audit
+from ..ratelimit import limiter, too_many
+from ..routers.wallet import debit_one_cup
+from ..schemas import RedeemCode
 
 router = APIRouter(prefix="/api/partner", tags=["partner"])
 
+FAIL_LIMIT, FAIL_WINDOW = 10, 600  # failed confirms per partner per 10 minutes
+
 
 class ConfirmIn(BaseModel):
-    code: str
+    code: RedeemCode
 
 
 @router.post("/redemptions/confirm")
-def confirm(
-    body: ConfirmIn,
-    partner: User = Depends(current_partner),
-    session: Session = Depends(get_session),
-):
-    red = session.exec(select(Redemption).where(Redemption.code == body.code)).first()
-    if not red:
-        raise HTTPException(404, "code_not_found")
-    if red.status == "confirmed":
-        raise HTTPException(409, "already_used")
-    if red.expires_at < datetime.utcnow():
-        red.status = "expired"
-        session.add(red)
-        session.commit()
-        raise HTTPException(410, "code_expired")
+def confirm(body: ConfirmIn, partner: User = Depends(current_partner), session: Session = Depends(get_session)):
+    # plain values: rollback() expires ORM objects and every later read would re-SELECT
+    partner_id, partner_cafe = partner.id, partner.cafe_id
+    fail_key = f"confirm-fail:{partner_id}"
+    wait = limiter.check(fail_key, FAIL_LIMIT, FAIL_WINDOW)
+    if wait:
+        audit("partner_confirm", partner_id=partner_id, cafe_id=partner_cafe, result="rate_limited")
+        raise too_many("confirm_failures", wait)
 
-    batches = active_batches(session, red.user_id)
-    if not batches:
-        raise HTTPException(400, "no_cups_left")
-    batch = batches[0]
-    batch.cups_used += 1
+    def fail(status: int, code: str, result: str) -> ApiError:
+        session.rollback()
+        limiter.record(fail_key, FAIL_WINDOW)
+        audit("partner_confirm", partner_id=partner_id, cafe_id=partner_cafe, result=result)
+        return ApiError(status, code)
 
-    avg_cup_price = 89_000  # average menu price used for cafe settlement
-    red.cafe_id = partner.cafe_id
-    red.status = "confirmed"
-    red.confirmed_at = datetime.utcnow()
-    red.settle_toman = int(avg_cup_price * SETTLEMENT_RATE)
-    session.add(batch)
-    session.add(red)
+    now = utcnow()
+    # Step 1, one conditional UPDATE: only a pending, unexpired code that is free or bound to THIS
+    # cafe can flip to confirmed. Unknown, used, expired, cancelled and other-cafe codes all look alike.
+    row = run(
+        session,
+        update(Redemption)
+        .where(
+            Redemption.code == body.code, Redemption.status == "pending", Redemption.expires_at > now,
+            col(Redemption.cafe_id).is_(None) | (Redemption.cafe_id == partner_cafe),
+        )
+        .values(status="confirmed", confirmed_at=now, cafe_id=partner_cafe, settle_toman=settings.settle_toman)
+        .returning(Redemption.id, Redemption.user_id, Redemption.drink),
+    ).first()
+    if row is None:
+        raise fail(404, "code_invalid", "code_invalid")
+    # Step 2, same transaction: take one cup from the oldest-expiring usable batch.
+    if not debit_one_cup(session, row.user_id, now):
+        raise fail(400, "no_cups_left", "no_cups_left")  # rollback also un-confirms step 1
     session.commit()
-    customer = session.get(User, red.user_id)
+    audit("partner_confirm", partner_id=partner_id, cafe_id=partner_cafe, result="ok", redemption_id=row.id)
     return {
-        "ok": True,
-        "code": red.code,
-        "drink": red.drink,
-        "customer": {"name": customer.name, "phone": customer.phone[-4:]},
-        "settle_toman": red.settle_toman,
-        "confirmed_at": red.confirmed_at.isoformat() + "Z",
+        "ok": True, "code": body.code, "drink": row.drink,
+        "settle_toman": settings.settle_toman, "confirmed_at": iso(now),
     }
 
 
 @router.get("/summary")
-def summary(
-    partner: User = Depends(current_partner), session: Session = Depends(get_session)
-):
+def summary(partner: User = Depends(current_partner), session: Session = Depends(get_session)):
     cafe = session.get(Cafe, partner.cafe_id)
-    rows = session.exec(
-        select(Redemption)
-        .where(Redemption.cafe_id == partner.cafe_id, Redemption.status == "confirmed")
-        .order_by(Redemption.id.desc())
+    now = utcnow()
+    today = datetime(now.year, now.month, now.day)
+    week_start = today - timedelta(days=6)  # 7 calendar days including today
+    mine = (Redemption.cafe_id == partner.cafe_id, Redemption.status == "confirmed")
+    in_week = Redemption.confirmed_at >= week_start
+
+    today_cups, today_settle, week_cups, week_settle, customers = session.exec(
+        select(
+            func.coalesce(func.sum(case((Redemption.confirmed_at >= today, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Redemption.confirmed_at >= today, Redemption.settle_toman), else_=0)), 0),
+            func.count(Redemption.id),
+            func.coalesce(func.sum(Redemption.settle_toman), 0),
+            func.count(func.distinct(Redemption.user_id)),
+        ).where(*mine, in_week)
+    ).one()
+    per_day = dict(
+        session.exec(
+            select(func.date(Redemption.confirmed_at), func.count(Redemption.id))
+            .where(*mine, in_week).group_by(func.date(Redemption.confirmed_at))
+        ).all()
+    )
+    recent = session.exec(
+        select(Redemption.code, Redemption.drink, Redemption.confirmed_at, Redemption.settle_toman)
+        .where(*mine).order_by(Redemption.confirmed_at.desc()).limit(12)
     ).all()
-    now = datetime.utcnow()
-    today = [r for r in rows if r.confirmed_at and r.confirmed_at.date() == now.date()]
-    week = [r for r in rows if r.confirmed_at and r.confirmed_at > now - timedelta(days=7)]
-    by_day = {}
-    for i in range(6, -1, -1):
-        day = (now - timedelta(days=i)).date()
-        by_day[day.isoformat()] = 0
-    for r in week:
-        key = r.confirmed_at.date().isoformat()
-        if key in by_day:
-            by_day[key] += 1
-    unique = len({r.user_id for r in week})
+    days = [(today - timedelta(days=i)).date().isoformat() for i in range(6, -1, -1)]
     return {
         "cafe": {"slug": cafe.slug, "fa": cafe.name_fa, "en": cafe.name_en} if cafe else None,
-        "today_cups": len(today),
-        "today_settle": sum(r.settle_toman for r in today),
-        "week_cups": len(week),
-        "week_settle": sum(r.settle_toman for r in week),
-        "unique_customers": unique,
-        "pending_settlement": sum(r.settle_toman for r in week),
-        "chart": [{"day": k, "cups": v} for k, v in by_day.items()],
+        "today_cups": today_cups,
+        "today_settle": today_settle,
+        "week_cups": week_cups,
+        "week_settle": week_settle,
+        "unique_customers": customers,
+        "pending_settlement": week_settle,
+        "chart": [{"day": d, "cups": per_day.get(d, 0)} for d in days],
         "recent": [
-            {
-                "code": r.code, "drink": r.drink,
-                "at": r.confirmed_at.isoformat() + "Z" if r.confirmed_at else None,
-                "settle": r.settle_toman,
-            }
-            for r in rows[:12]
+            {"code": c, "drink": d, "at": iso(at), "settle": s} for c, d, at, s in recent
         ],
     }

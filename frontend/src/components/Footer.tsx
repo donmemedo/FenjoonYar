@@ -1,14 +1,15 @@
 import Link from "next/link";
 
 import CupLogo from "@/components/CupLogo";
-import { getCopy, type Locale } from "@/lib/i18n";
+import { currentYear, getCopy, type Locale } from "@/lib/i18n";
+
+const link = "press rounded-lg py-1 text-muted hover:text-ink";
 
 export default function Footer({ locale }: { locale: Locale }) {
   const copy = getCopy(locale);
-  const year = locale === "fa" ? "۱۴۰۵" : "2026";
 
   return (
-    <footer className="relative mt-24 border-t border-line pb-24 pt-14 sm:pb-14">
+    <footer className="relative mt-24 border-t border-line pb-28 pt-14 sm:pb-14">
       <div className="mx-auto grid max-w-7xl gap-10 px-4 md:grid-cols-[1.4fr_1fr_1fr]">
         <div>
           <div className="flex items-center gap-2.5">
@@ -20,15 +21,15 @@ export default function Footer({ locale }: { locale: Locale }) {
           </div>
           <p className="mt-4 max-w-sm text-sm leading-relaxed text-muted">{copy.footer.made}</p>
         </div>
-        <div className="grid content-start gap-3 text-sm font-semibold">
-          <Link href={`/${locale}/plans`} className="text-muted transition hover:text-brand">{copy.nav.plans}</Link>
-          <Link href={`/${locale}/cafes`} className="text-muted transition hover:text-brand">{copy.nav.cafes}</Link>
-          <Link href={`/${locale}/partner`} className="text-muted transition hover:text-brand">{copy.nav.partner}</Link>
-        </div>
-        <div className="grid content-start gap-3 text-sm font-semibold">
-          <span className="text-muted">{copy.footer.privacy}</span>
-          <span className="text-muted">{copy.footer.terms}</span>
-          <span className="text-muted">{year} © {copy.brand} — {copy.footer.rights}</span>
+        <nav aria-label={copy.nav.footer} className="grid content-start gap-2 text-sm font-semibold">
+          <Link href={`/${locale}/plans`} className={link}>{copy.nav.plans}</Link>
+          <Link href={`/${locale}/cafes`} className={link}>{copy.nav.cafes}</Link>
+          <Link href={`/${locale}/partner`} className={link}>{copy.nav.partner}</Link>
+        </nav>
+        <div className="grid content-start gap-2 text-sm font-semibold">
+          <Link href={`/${locale}/privacy`} className={link}>{copy.footer.privacy}</Link>
+          <Link href={`/${locale}/terms`} className={link}>{copy.footer.terms}</Link>
+          <p className="mt-2 text-muted">{currentYear(locale)} © {copy.brand} — {copy.footer.rights}</p>
         </div>
       </div>
     </footer>

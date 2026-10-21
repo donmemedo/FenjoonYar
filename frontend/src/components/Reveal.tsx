@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, type ReactNode } from "react";
 
+/**
+ * Fades content in once, when it scrolls into view. Without JavaScript the content stays visible
+ * (`@media (scripting: none)` in globals.css and a <noscript> rule in the layout).
+ * Above-the-fold content should use the CSS-only `.rise` class instead, so first paint never waits for hydration.
+ */
 export default function Reveal({
   children,
   delay = 0,
@@ -16,6 +21,10 @@ export default function Reveal({
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
+    if (typeof IntersectionObserver === "undefined") {
+      node.classList.add("is-in");
+      return;
+    }
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
@@ -30,11 +39,7 @@ export default function Reveal({
   }, []);
 
   return (
-    <div
-      ref={ref}
-      className={`reveal ${className}`}
-      style={{ transitionDelay: `${delay}ms` }}
-    >
+    <div ref={ref} className={`reveal ${className}`} style={delay ? { transitionDelay: `${delay}ms` } : undefined}>
       {children}
     </div>
   );

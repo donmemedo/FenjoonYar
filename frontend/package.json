@@ -6,21 +6,23 @@
     "dev": "next dev -p 3044",
     "build": "next build",
     "start": "next start -p 3044",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test:unit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/lib/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "next": "15.5.4",
+    "next": "15.5.27",
+    "qrcode": "1.5.4",
     "react": "19.1.1",
-    "react-dom": "19.1.1",
-    "qrcode": "1.5.4"
+    "react-dom": "19.1.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.13",
-    "tailwindcss": "4.1.13",
-    "typescript": "5.9.2",
     "@types/node": "22.10.5",
+    "@types/qrcode": "1.5.5",
     "@types/react": "19.1.9",
     "@types/react-dom": "19.1.7",
-    "@types/qrcode": "1.5.5"
+    "tailwindcss": "4.1.13",
+    "typescript": "5.9.2"
   }
 }
