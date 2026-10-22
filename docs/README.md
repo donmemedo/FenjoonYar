@@ -11,6 +11,7 @@
 | `devops-hardening.md` | Containers, secrets, TLS proxy, upgrades, CI pipeline, backups |
 | `qa-test-plan.md` | Automated suites, browser run, manual checks, acceptance criteria |
 | `role-reviews.md` | Product owner, tech lead, red team, blue team and QA reviews |
+| `ponytail-review.md` | Over-engineering review of the new code: 23 findings kept as a follow-up backlog |
 | `screenshots/` | Light and dark, desktop and mobile captures from the production build |
 
 The root `LAST_Report.md` is the session report: what was done, what was skipped and what remains.

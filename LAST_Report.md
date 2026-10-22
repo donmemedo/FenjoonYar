@@ -1,87 +1,123 @@
-# LAST_Report.md: what was done, what was not, what is next
+# LAST_Report.md
 
-Branch: `security/hardening-pentest-ux` (local commit only, **not pushed, no PR yet**). Written 2026-10-22 when the usage limit was reached.
+Complete report of the hardening, pen-test, performance and UI/UX work on FenjoonYar (CUPS Iran), from the first session to 2026-10-22.
+Branch `security/hardening-pentest-ux`, opened as a pull request against `main`.
 
-## 1. Bottom line
+## 1. Summary
 
-The code changes for the hardening are **written and reviewed by a second model, but not yet verified end to end**.
-Backend: 238 pytest tests passed in the reviewer's run. Frontend: the platform unit tests passed (47). Nothing was built in Docker, `next build` was never run, the live security script was never run, and no PR was opened.
+The project had a **Critical** risk rating: anyone could take over any account (public default signing secret, login code returned by the API, 4-digit code with no attempt limit), mint unlimited free cups, and run script through the post-login redirect. The web tier ran a Next.js version with a known pre-auth remote-code-execution advisory.
 
-## 2. What happened, in order
+All blocking and important findings are fixed in code and proven by automated checks. What is **not** done is listed in section 6: real SMS and payment providers do not exist yet, the legal pages are drafts, and the attack-tree document was skipped.
 
-1. Read `HANDOFF.md` and the memory note. The previous session had changed no code.
-2. Loaded the requested skills. `/security-audit` ran as a forked auditor and wrote a full report (6 blocking, 9 important, 11 optional findings, overall risk Critical).
-3. Upgraded Next.js 15.5.4 to 15.5.27 (fixes a critical pre-auth RCE advisory). Backend packages were already upgraded in `.venv`.
-4. Found that the old backend cannot start on the upgraded `sqlmodel` (naive datetimes are rejected). The rewrite fixes it.
-5. Recorded a "before" benchmark on the original code with the old pins (`scripts` not needed; numbers below).
-6. Wrote the shared contract `docs/api-contract.md`, then ran three workers in parallel (backend, frontend platform, UI/UX), each followed by an Opus reviewer who fixed defects. The first run was cut off by a usage limit and resumed.
-7. Added CI (`.github/workflows/security.yml`, `dependabot.yml`, every action pinned to a commit hash), `scripts/advisory_scan.py` (OSV plus CISA known-exploited feed), and `scripts/pentest_live.py` (black-box checks for a local stack).
+| Evidence | Result |
+| --- | --- |
+| Backend tests (`pytest`) | 238 passed |
+| Live security checks (`scripts/pentest_live.py`, two local API instances) | 43 of 43 passed |
+| Frontend type check, unit tests, production build | clean, 49 passed, build ok |
+| Dependency advisories (OSV plus CISA known-exploited, 140 packages) | 0 (was 29 Python and 4 npm packages) |
+| Docker: `docker compose up -d --build` | both services healthy; non-root, read-only filesystem, no capabilities |
+| Real-browser run (headless Chrome) against the Docker stack | login, purchase, code creation: 7 of 7 checks, no console errors |
+| Full money path through the web container | buy, create code, cafe confirms, wallet minus one, settlement booked |
 
-## 3. Audit findings and their status
+## 2. What I did, in order
 
-| Finding | Fix written | Verified |
+**Session 1 (previous, interrupted).** Audited authentication and authorization only, upgraded Python packages in `.venv`. No code committed. Left `HANDOFF.md`.
+
+**This session.**
+1. Read `HANDOFF.md`, memory and the whole codebase; created branch `security/hardening-pentest-ux`.
+2. Ran the `/security-audit` skill as a forked auditor: 6 blocking, 9 important, 11 optional findings, three attack chains, dependency and secret scans (`docs/security/audit-report.md`).
+3. Upgraded Next.js 15.5.4 to 15.5.27; later added npm `overrides` for postcss, sharp and source-map-js.
+4. Found that the old backend cannot start on the upgraded `sqlmodel` (rejects naive datetimes); fixed in the rewrite.
+5. Recorded a "before" benchmark on the original code with the old pins.
+6. Wrote the shared contract (`docs/api-contract.md`) and ran three workers in parallel with disjoint file ownership (backend, frontend platform, UI/UX). Each was reviewed by a second model (Opus) that fixed defects. The first run hit a usage limit; I resumed it from its saved state.
+7. Re-verified everything myself (section 1), built and ran the Docker stack, took light and dark screenshots, ran the browser tests.
+8. Added CI, Dependabot, an advisory scanner, a live security script, documentation, a README rewrite, a code graph, and a ponytail review.
+
+## 3. Findings and fixes
+
+| Finding | Fix | Proof |
 | --- | --- | --- |
-| B1 login code returned by default | `DEMO_MODE` gate, off by default | pytest |
-| B2 public default JWT secret | refuses to start unless 32+ random chars | pytest |
-| B3 4-digit code, no attempt limit | 6 digits, `secrets`, HMAC at rest, 5 tries, cooldown, rate limits | pytest incl. 8-thread race |
-| B4 orders credited without payment | `pending` unless `DEMO_MODE`; inactive plans rejected | pytest |
-| B5 open redirect via `?next=` | `safeNext` allow-list | 47 node tests |
+| B1 login code returned by default | only when `DEMO_MODE=1`; off by default | tests, live A4 |
+| B2 public default JWT secret | startup refuses unless 32+ chars and not a known default; compose requires it | tests, live A7/A8 |
+| B3 4-digit code, no limit | 6 digits via `secrets`, HMAC at rest, 5 attempts, 60 s cooldown, per-IP and per-phone limits, single use even under 8 threads | tests, live A5/A6/A17 |
+| B4 orders paid without payment | `pending` unless demo; inactive plans rejected | tests, live B2 |
+| B5 open redirect and script execution via `?next=` | strict allow-list `safeNext` | 49 unit tests |
 | B6 Next.js RCE advisory | 15.5.27 | scanner |
-| I1 partner confirms any code | pending only, cafe-bound, generic error, brute-force throttle | pytest |
-| I2 non-atomic confirm | conditional UPDATEs in one transaction | pytest incl. concurrency |
-| I3 14-day irrevocable token | 24 h, token version, logout revokes | pytest |
-| I4 token in localStorage | HttpOnly cookie, same-origin proxy, CSRF header and Origin check | pytest only |
-| I5 no security headers | API headers plus per-request CSP nonce in Next middleware | not run in a browser |
-| I6, I7 no rate limits or input limits | limiter, length limits, 413 | pytest |
-| I8 demo partner everywhere | seeded only in `DEMO_MODE`; old DBs are demoted | pytest |
-| I9 vulnerable pins | pinned to the upgraded versions | scanner (Python clean) |
-| O1 to O11 | most done (docs off in prod, CORS, non-root, `npm ci`, SW, self-hosted fonts, audit log) | partly |
+| I1, I2 partner confirm weaknesses and race | pending only, cafe-bound, one generic error, throttled, atomic conditional updates | tests, live B12/B13/B15/B17 |
+| I3, I4 long, irrevocable, script-readable token | 24 h HttpOnly cookie, token version, real logout, CSRF header and Origin check | tests, live B1/B9/B10/B20/B21, browser |
+| I5 no security headers | API headers and a per-request CSP nonce in Next middleware | live A2, headers on built app |
+| I6, I7 no rate or size limits | limiter, field limits, 413 | tests, live A11/A12 |
+| I8 demo partner everywhere | seeded only in demo; demoted on old databases | tests |
+| I9 vulnerable pins | exact upgraded pins | scanner |
+| O1 to O11 | docs off in production, explicit CORS, non-root, `npm ci` only, service worker rewritten, self-hosted fonts, audit logging, honest stats | tests and Docker run |
 
-Extra defects the reviewers found and fixed: live redemption codes were written to access logs, DB errors logged bound parameters, a CSP bypass through the middleware matcher, an auth-state race after login, an offline page that failed contrast.
+Extra defects the reviewers found and fixed: live redemption codes were written to access logs; database errors logged bound parameters; a middleware matcher gap let some paths skip the CSP; an auth-state race after login; an offline page that failed contrast; reduced-motion rules that did not match some animation classes.
 
-## 4. Performance (before numbers; after numbers not yet measured)
+## 4. Performance
 
-Original code, old pins, 120 confirmed redemptions, machine load average above 50 (timings noisy, SQL counts are not):
+SQL statements per request (load-independent, the fair metric). Wall-clock timings are in `docs/performance.md`, with the caveat that the "before" run happened at a machine load above 50.
 
-| Endpoint | SQL statements per request | p50 |
+| Endpoint | Before | After |
 | --- | --- | --- |
-| redemption history | **242** | 2626 ms |
-| partner summary | 3 | 203 ms |
-| stats | 4 | 98 ms |
-| wallet / orders | 3 | 91 / 61 ms |
+| Redemption history | 242 | 2 |
+| Stats | 4 | 1 |
+| Orders | 3 | 2 |
+| Wallet | 3 | 3 |
+| Partner summary | 3 (loaded all rows in Python) | 5 (SQL aggregates, constant) |
 
-The rewrite moves these to SQL aggregates, adds composite indexes, WAL mode, gzip, cache headers and a self-hosted font. **Re-run `/tmp/.../scratchpad/bench/baseline.py` against the new code to get the "after" column.**
+Also: SQLite WAL and composite indexes, gzip, cache headers on public endpoints, same-origin proxy (no preflights), one session call instead of one per component, self-hosted fonts, on-demand QR library, calmer animations. Next build: 103 to 120 kB first-load JavaScript per page.
 
-## 5. Not done (and why)
+## 5. UI/UX (apple-design pass)
 
-- **Live security test (`scripts/pentest_live.py`)**: written, never run.
-- **Attack-tree document**: the safety classifier stopped the write twice. As instructed I did not switch models; skipped. The audit report covers the same chains.
-- **Role reviews (product owner, tech lead, red/blue team, QA agents)**: those agent types belong to another project; not used.
-- **Docker build and compose run**, **`next build`**, **browser and screenshot check**: not run (memory, then limit).
-- **Three npm advisories remain** (postcss, sharp, source-map-js, all inherited from Next). Fix: add `overrides` in `frontend/package.json`, `npm install`, re-run `python3 scripts/advisory_scan.py`.
-- **graphify** and **ponytail-review**: skills were loaded but not run. `graphify-out/` does not exist.
-- **docs folder**: only `api-contract.md` and `architecture.md`. Missing: pentest results, performance after, QA plan, threat-intel lifecycle, README rewrite (still mentions `NEXT_PUBLIC_API_URL`).
-- **PR and push**: not done.
+Instant press feedback, no `transition-all`, calmer infinite animations, support for reduced motion, reduced transparency and high contrast; accessible mobile menu (expanded state, Escape, focus return, scroll lock); safe-area bottom bar; real forms with autocomplete and live regions; progress rings and a countdown that announces each minute, not each second; skip link; no letter-spacing on Persian text; Persian UX vocabulary («پیش‌خوان کافه», «نادرست»); localised 404; privacy and terms pages; honest statistics. Screenshots in `docs/screenshots/` (light and dark, desktop and mobile, fa and en).
 
-## 6. Open issues from the reviewers
+## 6. Not done, skipped, or needs your decision
 
-- **Rate limits behind Next**: the proxy does not set `X-Forwarded-For`, so with `TRUSTED_PROXIES=1` and nothing in front of web, the header is client-written. Put a real reverse proxy in front, or have middleware write the header. Test A17 in `pentest_live.py` checks this.
-- `CORS_ORIGINS` must list the public web origin or every same-origin POST gets `403 bad_origin`.
-- Existing `api_data` volumes are root-owned; the non-root image needs a one-time `chown 10001` of `/srv/data`.
-- Unverified at runtime: CSP nonce with `strict-dynamic`, service worker, standalone image, healthchecks, dark-mode contrast, screen readers.
-- Legal pages are drafts. With `DEMO_MODE=0` nobody can log in or pay until an SMS provider and payment gateway exist.
-- Local `.env` still has the weak default secret; generate one before running compose (`JWT_SECRET` is now required).
-- Do not commit `frontend/tsconfig.tsbuildinfo` or `skills-lock.json`.
+| Item | Why |
+| --- | --- |
+| **Attack-tree document** | The safety classifier stopped it twice. As you instructed, I did not switch models; skipped. The audit report covers the same chains. |
+| **SMS provider and payment gateway** | Do not exist. With `DEMO_MODE=0` nobody can log in or pay. Needs your provider choice. |
+| **Legal pages** | Drafts with open brackets; need counsel. |
+| **Product owner, tech lead, red team, blue team, QA agents** | The available agent types belong to another project, so I wrote the five reviews myself in `docs/role-reviews.md`. |
+| **"Opus 4.8"** | Not an available model. I used Sonnet 5.5 to implement and Opus 5.5 to review, as you asked for a cross-check. |
+| **Skills** | The security-audit, graphify, ponytail and apple-design skills were applied directly. `security-auditor`, `security-scanning-security-sast`, `red-team-tools`, `red-team-tactics`, `attack-tree-construction` and the FastAPI, Python and Docker-hardening skills were loaded as guidance but not run as separate passes. Bandit and Semgrep are not installed on this machine; they run in the CI workflow instead. |
+| **Ponytail findings** | 23 found (about 158 lines removable); kept as a backlog in `docs/ponytail-review.md`, none applied, to keep the verified code unchanged. |
+| **Graph** | Built from code only (844 nodes, 2,101 edges, 48 communities). No docs, papers or images were extracted because that needs a language-model pass. |
+| **Old containers** | Two stopped containers (`cups_api`, `cups_web`, with volume `44_cups_api_data`) from your first build in `~/Documents/Darvag/Projects/44_CUPS` still exist. I did not touch them. I removed the fixed `container_name` from compose so they no longer clash. |
+| **`.env`** | The old `.env` held the public default secret, which the app now refuses. I replaced it with a freshly generated secret and `DEMO_MODE=1`. It is git-ignored. |
 
-## 7. Next steps, in order
+## 7. Risks to know about before going public
 
-1. `cd backend && .venv/bin/python -m pytest -q`
-2. Add npm overrides, `npm install`, `npm run typecheck && npm run test:unit && npm run build` in `frontend/`.
-3. Make a real `.env` (`JWT_SECRET=$(python3 -c "import secrets;print(secrets.token_urlsafe(48))")`, `DEMO_MODE=1` for the demo), `docker compose up -d --build`, open http://127.0.0.1:3044.
-4. Start two local API instances and run `python3 scripts/pentest_live.py <prod-like url> <demo url>`.
-5. Re-run the benchmark; fill the "after" column; finish the docs and README.
-6. `graphify update .`, run `/ponytail-review` on the diff, then push and open the PR.
+1. **Per-IP rate limits need a proxy that sets `X-Forwarded-For`.** The Next.js proxy does not add its own entry. Without a TLS reverse proxy that sets it (config in `docs/devops-hardening.md`), visitors share one budget and a client can choose its own. This is the main residual risk.
+2. `CORS_ORIGINS` must list the public web origin, or every same-origin POST gets `403 bad_origin`.
+3. Existing `api_data` volumes are root-owned; the non-root image needs a one-time `chown` to uid 10001.
+4. SQLite and the in-process limiter mean one API process.
+5. A transient network failure on logout leaves the cookie alive while the UI shows logged out.
+6. Low-severity races remain on the OTP cooldown and the partner failure counter (bounded by other limits).
+7. The anonymous session check logs one expected 401 per page load in the browser console.
 
-## 8. Memory
+## 8. How to run
 
-`~/.claude/projects/.../memory/hardening-handoff.md` is out of date: code now exists and the status above supersedes `HANDOFF.md`.
+```bash
+cp .env.example .env     # set JWT_SECRET (and DEMO_MODE=1 for the demo)
+docker compose up -d --build        # http://localhost:3044
+cd backend && .venv/bin/python -m pytest -q
+cd frontend && npm run typecheck && npm run test:unit && npm run build
+python3 scripts/advisory_scan.py
+python3 scripts/pentest_live.py http://127.0.0.1:18201 http://127.0.0.1:18202   # see docs/security/pentest-results.md
+```
+
+Demo login: any `09xxxxxxxxx` customer; cafe `09120000000`, with `DEMO_MODE=1`.
+
+## 9. Next steps
+
+1. Pick an SMS provider and a payment gateway; implement the verified payment callback that credits cups.
+2. Put a TLS reverse proxy in front and set `COOKIE_SECURE=1`, `ENABLE_HSTS=1`.
+3. Legal review of the privacy and terms pages.
+4. PostgreSQL and Redis before running more than one API process.
+5. Work through `docs/ponytail-review.md`.
+6. Build the Capacitor wrappers for APK and IPA (native clients use `X-Client: native`).
+
+## 10. Memory and handoff
+
+`HANDOFF.md` is superseded by this report and was left untracked. The project memory note has been updated to point here.
