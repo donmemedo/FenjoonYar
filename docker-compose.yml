@@ -13,7 +13,6 @@ services:
   api:
     <<: *hardening
     build: ./backend
-    container_name: cups_api
     environment:
       ENV: ${APP_ENV:-production}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
@@ -43,7 +42,6 @@ services:
       context: ./frontend
       args:
         API_INTERNAL_URL: http://api:8000
-    container_name: cups_web
     environment:
       API_INTERNAL_URL: http://api:8000
       ENABLE_HSTS: ${ENABLE_HSTS:-0}

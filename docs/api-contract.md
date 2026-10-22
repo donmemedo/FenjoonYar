@@ -39,7 +39,7 @@ Validation errors are `422` with FastAPI's default body.
 | `GET /redemptions/{code}` | user | code is 8 digits | redemption, or `404 not_found` |
 | `POST /partner/redemptions/confirm` | partner | `{code}` 8 digits | `{ok, code, drink, settle_toman, confirmed_at}`. No customer name or phone. `404 code_invalid` for unknown, used, expired or other-cafe codes. `400 no_cups_left`. `429 rate_limited` after 10 failures in 10 minutes. |
 | `GET /partner/summary` | partner | none | unchanged shape |
-| `GET /health` | none | none | `{status:"ok"}` liveness |
+| `GET /health` | none | none | `{status:"ok", demo: bool}` liveness. The web login screen uses `demo` to decide whether to show the demo hints. |
 | `GET /ready` | none | none | `{status:"ok"}` after a database check, else `503` |
 
 ## Redemption object

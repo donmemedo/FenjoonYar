@@ -50,10 +50,10 @@ export default function HeroVisual({ locale }: { locale: Locale }) {
         </div>
       </div>
 
-      <div className="glass absolute -start-6 top-10 hidden rounded-2xl px-4 py-3 text-xs font-bold shadow-lg sm:block lg:animate-float [animation-delay:1.2s]">
+      <div className="glass absolute -start-8 -top-4 hidden rounded-2xl px-4 py-3 text-xs font-bold shadow-lg sm:block lg:animate-float [animation-delay:1.2s]">
         ☕ {copy.app.status.confirmed}
       </div>
-      <div className="glass absolute -end-4 bottom-16 hidden rounded-2xl px-4 py-3 text-xs font-bold shadow-lg sm:block lg:animate-float [animation-delay:2.4s]">
+      <div className="glass absolute -end-6 -bottom-4 hidden rounded-2xl px-4 py-3 text-xs font-bold shadow-lg sm:block lg:animate-float [animation-delay:2.4s]">
         {copy.hero.note}
       </div>
     </div>
