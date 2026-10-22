@@ -1,4 +1,6 @@
-export default function CupLogo({ className = "h-9 w-9" }: { className?: string }) {
+/** Brand mark. Steam only moves when `animated` (an always-on loop in the header is a distraction). */
+export default function CupLogo({ className = "h-9 w-9", animated = false }: { className?: string; animated?: boolean }) {
+  const steam = animated ? "animate-steam" : undefined;
   return (
     <svg viewBox="0 0 48 48" fill="none" className={className} aria-hidden="true">
       <defs>
@@ -22,10 +24,8 @@ export default function CupLogo({ className = "h-9 w-9" }: { className?: string 
         strokeWidth="2.4"
         strokeLinecap="round"
       />
-      <g className="origin-center">
-        <path d="M18 14c0-2 2-2 2-4" stroke="url(#cupGrad)" strokeWidth="2" strokeLinecap="round" className="animate-steam" />
-        <path d="M24 14c0-2 2-2 2-4" stroke="url(#cupGrad)" strokeWidth="2" strokeLinecap="round" className="animate-steam" style={{ animationDelay: "0.9s" }} />
-      </g>
+      <path d="M18 14c0-2 2-2 2-4" stroke="url(#cupGrad)" strokeWidth="2" strokeLinecap="round" className={steam} />
+      <path d="M24 14c0-2 2-2 2-4" stroke="url(#cupGrad)" strokeWidth="2" strokeLinecap="round" className={steam} style={animated ? { animationDelay: "0.9s" } : undefined} />
     </svg>
   );
 }

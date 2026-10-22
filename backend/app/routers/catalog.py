@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends
-from sqlmodel import Session, func, select
+from fastapi import APIRouter, Depends, Path, Query
+from sqlalchemy import false, literal
+from sqlmodel import Session, col, func, or_, select
 
 from ..db import get_session
+from ..errors import ApiError
 from ..models import Cafe, Plan, Redemption, User
+from ..schemas import PlanKind
 
 router = APIRouter(prefix="/api", tags=["catalog"])
 
@@ -34,7 +37,7 @@ def cafe_dict(c: Cafe) -> dict:
 
 
 @router.get("/plans")
-def list_plans(kind: str | None = None, session: Session = Depends(get_session)):
+def list_plans(kind: PlanKind | None = None, session: Session = Depends(get_session)):
     q = select(Plan).where(Plan.is_active == True)  # noqa: E712
     if kind:
         q = q.where(Plan.kind == kind)
@@ -43,42 +46,43 @@ def list_plans(kind: str | None = None, session: Session = Depends(get_session))
 
 @router.get("/cafes")
 def list_cafes(
-    city: str | None = None,
-    tag: str | None = None,
-    q: str | None = None,
+    city: str | None = Query(None, max_length=40),
+    tag: str | None = Query(None, max_length=40),
+    q: str | None = Query(None, max_length=64),
     session: Session = Depends(get_session),
 ):
     stmt = select(Cafe).where(Cafe.is_active == True)  # noqa: E712
-    cafes = session.exec(stmt).all()
     if city:
-        cafes = [c for c in cafes if city in (c.city_fa, c.city_en)]
+        stmt = stmt.where(or_(Cafe.city_fa == city, Cafe.city_en == city))
     if tag:
-        cafes = [c for c in cafes if tag in c.tags.split(",")]
-    if q:
-        needle = q.strip().lower()
-        cafes = [
-            c for c in cafes
-            if needle in c.name_fa.lower() or needle in c.name_en.lower()
-            or needle in c.area_fa.lower() or needle in c.area_en.lower()
-        ]
-    return [cafe_dict(c) for c in sorted(cafes, key=lambda c: -c.rating)]
+        # tags is a comma separated column: match a whole key between commas ("a,b" is no key)
+        whole = (literal(",") + Cafe.tags + literal(",")).contains(f",{tag},", autoescape=True)
+        stmt = stmt.where(false() if "," in tag else whole)
+    if q and q.strip():
+        needle = q.strip()
+        stmt = stmt.where(or_(*(col(c).icontains(needle, autoescape=True)
+                                for c in (Cafe.name_fa, Cafe.name_en, Cafe.area_fa, Cafe.area_en))))
+    return [cafe_dict(c) for c in session.exec(stmt.order_by(Cafe.rating.desc(), Cafe.id)).all()]
 
 
 @router.get("/cafes/{slug}")
-def get_cafe(slug: str, session: Session = Depends(get_session)):
+def get_cafe(slug: str = Path(max_length=40), session: Session = Depends(get_session)):
     c = session.exec(select(Cafe).where(Cafe.slug == slug)).first()
-    return cafe_dict(c) if c else {}
+    if c is None:
+        raise ApiError(404, "not_found")
+    return cafe_dict(c)
 
 
 @router.get("/stats")
 def stats(session: Session = Depends(get_session)):
-    cafes = session.exec(select(func.count(Cafe.id))).one()
-    users = session.exec(select(func.count(User.id))).one()
-    cups = session.exec(
-        select(func.count(Redemption.id)).where(Redemption.status == "confirmed")
+    """Real counts only (no marketing offsets)."""
+    active = Cafe.is_active == True  # noqa: E712
+    cafes, cities, members, cups = session.exec(
+        select(
+            select(func.count(Cafe.id)).where(active).scalar_subquery(),
+            select(func.count(func.distinct(Cafe.city_en))).where(active).scalar_subquery(),
+            select(func.count(User.id)).where(User.role == "customer").scalar_subquery(),
+            select(func.count(Redemption.id)).where(Redemption.status == "confirmed").scalar_subquery(),
+        )
     ).one()
-    cities = len({c.city_en for c in session.exec(select(Cafe)).all()})
-    return {
-        "cafes": cafes, "cities": cities,
-        "members": users + 9_400, "cups_served": cups + 128_500,
-    }
+    return {"cafes": cafes, "cities": cities, "members": members, "cups_served": cups}

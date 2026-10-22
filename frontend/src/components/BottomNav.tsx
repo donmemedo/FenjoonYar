@@ -19,30 +19,42 @@ export default function BottomNav({ locale }: { locale: Locale }) {
   const { user } = useAuth();
 
   const items = [
-    { href: `/${locale}`, label: copy.brand, icon: icons.home },
-    { href: `/${locale}/plans`, label: copy.nav.plans, icon: icons.plans },
-    { href: `/${locale}/cafes`, label: copy.nav.cafes, icon: icons.cafes },
+    { href: `/${locale}`, label: copy.brand, icon: icons.home, match: [] as string[] },
+    { href: `/${locale}/plans`, label: copy.nav.plans, icon: icons.plans, match: [`/${locale}/plans`] },
+    { href: `/${locale}/cafes`, label: copy.nav.cafes, icon: icons.cafes, match: [`/${locale}/cafes`] },
     {
       href: user ? (user.role === "partner" ? `/${locale}/partner` : `/${locale}/app`) : `/${locale}/login`,
       label: user ? copy.nav.app : copy.nav.login,
       icon: icons.account,
+      match: [`/${locale}/app`, `/${locale}/partner`, `/${locale}/login`],
     },
   ];
 
+  // The home tab is active only on the exact home path; the others also cover their sub-routes.
+  const isActive = (item: (typeof items)[number]) =>
+    item.match.length === 0
+      ? pathname === item.href
+      : item.match.some((m) => pathname === m || pathname.startsWith(`${m}/`));
+
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 px-3 pb-3 sm:hidden">
-      <div className="glass flex items-center justify-around rounded-3xl px-2 py-2">
+    // env(safe-area-inset-bottom) keeps the bar clear of the iOS home indicator (viewport-fit=cover).
+    <nav
+      aria-label={copy.nav.tabs}
+      className="fixed inset-x-0 bottom-0 z-40 px-3 pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:hidden"
+    >
+      <div className="glass-blur flex items-center justify-around rounded-3xl px-2 py-1.5">
         {items.map((item) => {
-          const active = pathname === item.href;
+          const active = isActive(item);
           return (
             <Link
               key={item.href}
               href={item.href}
-              className={`flex min-w-16 flex-col items-center gap-1 rounded-2xl px-3 py-1.5 text-[10px] font-bold transition ${
-                active ? "text-brand" : "text-muted"
+              aria-current={active ? "page" : undefined}
+              className={`press flex min-h-12 min-w-16 flex-col items-center justify-center gap-0.5 rounded-2xl px-3 py-1 text-[11px] font-bold ${
+                active ? "text-brand-ink" : "text-muted"
               }`}
             >
-              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d={item.icon} />
               </svg>
               {item.label}

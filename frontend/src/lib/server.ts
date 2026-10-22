@@ -1,15 +1,18 @@
 import { API_BASE, type Cafe, type Plan, type Stats } from "./api";
 
-const SERVER_BASE = (
-  process.env.API_INTERNAL_URL || process.env.NEXT_PUBLIC_API_URL || API_BASE
-).replace(/\/$/, "");
-
-/** Fetches from the API but never breaks the page: falls back to seed-shaped data. */
+/**
+ * Public catalog reads for server components. Cached 60 s by Next's data cache (the API sends
+ * the same max-age), so a render never waits on the backend. Never throws: the page renders
+ * with an empty/zero fallback instead of failing.
+ */
 async function safeGet<T>(path: string, fallback: T): Promise<T> {
   try {
-    const res = await fetch(`${SERVER_BASE}${path}`, { cache: "no-store" });
-    if (!res.ok) return fallback;
-    return (await res.json()) as T;
+    // The timeout keeps a hung backend from hanging every dynamic render (undici waits minutes).
+    const res = await fetch(`${API_BASE}${path}`, {
+      next: { revalidate: 60 },
+      signal: AbortSignal.timeout(4000),
+    });
+    return res.ok ? ((await res.json()) as T) : fallback;
   } catch {
     return fallback;
   }
@@ -18,4 +21,4 @@ async function safeGet<T>(path: string, fallback: T): Promise<T> {
 export const getPlans = () => safeGet<Plan[]>("/api/plans", []);
 export const getCafes = () => safeGet<Cafe[]>("/api/cafes", []);
 export const getStats = () =>
-  safeGet<Stats>("/api/stats", { cafes: 12, cities: 5, members: 9400, cups_served: 128500 });
+  safeGet<Stats>("/api/stats", { cafes: 0, cities: 0, members: 0, cups_served: 0 });

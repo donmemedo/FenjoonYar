@@ -12,6 +12,12 @@
   --c-line: rgba(27, 18, 16, 0.1);
   --c-shadow: 18px 18px 48px -24px rgba(90, 45, 10, 0.35);
   --c-glow: 0.55;
+  /* Text-safe accents (WCAG AA on the page and on their own 10% tints). The raw brand colours
+     stay for fills and large display type only. */
+  --c-brand-ink: #b43a0a;
+  --c-mint-ink: #0b7a55;
+  --c-berry-ink: #c4184a;
+  --c-focus: #b43a0a;
 }
 
 .dark {
@@ -24,6 +30,10 @@
   --c-line: rgba(255, 255, 255, 0.1);
   --c-shadow: 0 30px 70px -40px rgba(0, 0, 0, 0.9);
   --c-glow: 1;
+  --c-brand-ink: #ff8a4a;
+  --c-mint-ink: #34e0a6;
+  --c-berry-ink: #ff7a99;
+  --c-focus: #ffa166;
 }
 
 @theme inline {
@@ -34,31 +44,34 @@
   --color-ink: var(--c-ink);
   --color-muted: var(--c-muted);
   --color-line: var(--c-line);
+  --color-brand-ink: var(--c-brand-ink);
+  --color-mint-ink: var(--c-mint-ink);
+  --color-berry-ink: var(--c-berry-ink);
+  --color-focus: var(--c-focus);
 
   --color-brand: #ff6b1a;
   --color-brand2: #ffb020;
   --color-mint: #14c98c;
   --color-violet: #7c5cff;
   --color-berry: #ff3d71;
+  /* Text on the orange gradient: white fails AA there (2.9:1 and 1.9:1), ink passes (6.4:1+). */
+  --color-on-brand: #1b1210;
 
-  --font-sans: var(--font-app), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-vazir), var(--font-jakarta), ui-sans-serif, system-ui, sans-serif;
   --radius-2xl: 1.25rem;
   --radius-3xl: 1.75rem;
   --radius-4xl: 2.25rem;
 }
 
 @theme {
-  --animate-float: float 7s ease-in-out infinite;
+  --animate-float: float 9s ease-in-out infinite;
   --animate-steam: steam 3.4s ease-in-out infinite;
-  --animate-marquee: marquee 38s linear infinite;
-  --animate-shine: shine 3.5s linear infinite;
-  --animate-pulse-glow: pulseGlow 4s ease-in-out infinite;
-  --animate-spin-slow: spin 18s linear infinite;
 }
 
+/* Only transform and opacity are ever animated below. */
 @keyframes float {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-16px) rotate(2deg); }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
 }
 @keyframes steam {
   0% { opacity: 0; transform: translateY(6px) scaleX(0.8); }
@@ -69,15 +82,25 @@
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
 }
-@keyframes shine {
-  from { background-position: 200% center; }
-  to { background-position: -200% center; }
+@keyframes marquee-rtl {
+  from { transform: translateX(0); }
+  to { transform: translateX(50%); }
 }
-@keyframes pulseGlow {
-  0%, 100% { opacity: 0.55; transform: scale(1); }
-  50% { opacity: 1; transform: scale(1.08); }
+@keyframes glow {
+  0%, 100% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+@keyframes grow {
+  from { transform: scaleY(0); }
 }
 
+/* ---------- base ---------- */
 * { -webkit-tap-highlight-color: transparent; }
 
 html { scroll-behavior: smooth; }
@@ -85,20 +108,68 @@ html { scroll-behavior: smooth; }
 body {
   background: var(--c-bg);
   color: var(--c-ink);
-  font-family: var(--font-app), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-vazir), var(--font-jakarta), system-ui, sans-serif;
   overflow-x: hidden;
-  transition: background-color 0.5s ease, color 0.35s ease;
+  /* Eases the light/dark switch so it is not a flash. Colours only, no layout. */
+  transition: background-color 0.4s ease, color 0.3s ease;
+}
+html:lang(en) body {
+  font-family: var(--font-jakarta), var(--font-vazir), system-ui, sans-serif;
 }
 
-[dir="rtl"] body { letter-spacing: 0; }
+/* Keyboard focus: one visible ring everywhere, never on mouse click. */
+:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 3px;
+}
+main:focus { outline: none; }
 
-/* ---------- surfaces ---------- */
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  inset-inline-start: 0.75rem;
+  z-index: 100;
+  padding: 0.75rem 1.25rem;
+  border-radius: 9999px;
+  background: var(--c-ink);
+  color: var(--c-bg);
+  font-weight: 800;
+  translate: 0 -200%;
+}
+.skip-link:focus { translate: 0 0; }
+
+::selection { background: #ff6b1a; color: #1b1210; }
+
+/* ---------- typography ----------
+   Persian never gets letter-spacing: it breaks the joining of letters. Tracking lives only on
+   Latin display text (:lang(en)) and on dir="ltr" numeric code displays. Leading follows size:
+   Persian needs more room than Latin at the same size. */
+.t-display { line-height: 1.3; }
+.t-display:lang(en) { line-height: 1.06; letter-spacing: -0.035em; }
+.t-title { line-height: 1.4; }
+.t-title:lang(en) { line-height: 1.15; }
+.eyebrow { font-size: 0.75rem; font-weight: 800; color: var(--c-brand-ink); }
+.eyebrow:lang(en) { text-transform: uppercase; letter-spacing: 0.2em; }
+
+/* ---------- surfaces ----------
+   In the components layer so Tailwind utilities (ring-*, shadow-*) can still override them. */
+@layer components {
+/* Cards: translucent but not blurred. Backdrop blur is expensive and is kept for floating chrome. */
 .glass {
-  background: color-mix(in srgb, var(--c-surface) 82%, transparent);
+  background: color-mix(in srgb, var(--c-surface) 92%, transparent);
   border: 1px solid var(--c-line);
-  backdrop-filter: blur(20px) saturate(140%);
   box-shadow: var(--c-shadow);
 }
+/* Header, bottom bar and menu: content scrolls under them, so they get the blur. */
+.glass-blur {
+  background: color-mix(in srgb, var(--c-surface) 78%, transparent);
+  border: 1px solid var(--c-line);
+  box-shadow: var(--c-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+}
+}
+.scrim { background: color-mix(in srgb, var(--c-bg) 82%, transparent); }
 
 .mesh {
   position: absolute;
@@ -107,27 +178,30 @@ body {
   overflow: hidden;
   pointer-events: none;
 }
+/* Soft radial gradients: no filter: blur(), so nothing is re-rasterised while they breathe. */
 .mesh::before,
 .mesh::after {
   content: "";
   position: absolute;
-  width: 46rem;
-  height: 46rem;
+  width: 34rem;
+  height: 34rem;
   border-radius: 50%;
-  filter: blur(90px);
-  opacity: calc(0.22 * var(--c-glow));
-  animation: pulseGlow 9s ease-in-out infinite;
+  opacity: calc(0.2 * var(--c-glow));
 }
 .mesh::before {
-  background: radial-gradient(circle, #ff6b1a, transparent 65%);
-  top: -14rem;
-  inset-inline-start: -10rem;
+  background: radial-gradient(circle, #ff6b1a, transparent 68%);
+  top: -10rem;
+  inset-inline-start: -8rem;
 }
 .mesh::after {
-  background: radial-gradient(circle, #7c5cff, transparent 65%);
-  bottom: -18rem;
-  inset-inline-end: -12rem;
-  animation-delay: 2s;
+  background: radial-gradient(circle, #7c5cff, transparent 68%);
+  bottom: -12rem;
+  inset-inline-end: -9rem;
+}
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  .mesh::before,
+  .mesh::after { animation: glow 28s ease-in-out infinite; }
+  .mesh::after { animation-delay: -9s; }
 }
 
 .grid-lines {
@@ -138,44 +212,206 @@ body {
   mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, #000 30%, transparent 75%);
 }
 
+/* Static gradient: a looping shine on the hero heading pulls the eye away from the call to action. */
 .text-gradient {
-  background: linear-gradient(110deg, #ff6b1a, #ffb020 45%, #ff3d71 75%, #ff6b1a);
-  background-size: 200% auto;
+  background: linear-gradient(110deg, #ff6b1a, #ffb020 50%, #ff3d71);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: shine 6s linear infinite;
 }
 
-.ring-brand-glow {
-  box-shadow: 0 0 0 1px color-mix(in srgb, #ff6b1a 40%, transparent),
-    0 18px 45px -18px color-mix(in srgb, #ff6b1a 70%, transparent);
+/* ---------- press feedback ----------
+   Respond on pointer-down, not on release: 90 ms in, a softer return. Transitions list only
+   what changes (never `all`). */
+.press {
+  transition:
+    scale 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    translate 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease;
+}
+.press:active:not(:disabled, [aria-disabled="true"]) {
+  scale: 0.97;
+  transition-duration: 90ms;
+}
+.press:disabled { cursor: not-allowed; }
+
+/* ---------- form fields ---------- */
+.field {
+  width: 100%;
+  border: 1px solid var(--c-line);
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--c-surface-2) 50%, transparent);
+  color: var(--c-ink);
+  font-weight: 600;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.field::placeholder { color: var(--c-muted); opacity: 0.8; }
+.field:hover { border-color: color-mix(in srgb, var(--c-brand-ink) 35%, var(--c-line)); }
+.field:focus-visible {
+  outline: 2px solid var(--c-focus);
+  outline-offset: 2px;
+  border-color: var(--c-focus);
+}
+.field[aria-invalid="true"] { border-color: var(--c-berry-ink); }
+
+/* One-time code fields. LTR digits only, so letter-spacing is safe here; the extra start padding
+   offsets the gap tracking leaves after the last digit so the digits sit centred. */
+.code-field {
+  direction: ltr;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.4em;
+  padding-inline: 0.75rem;
+  padding-inline-start: calc(0.75rem + 0.4em);
+}
+.code-field::placeholder { letter-spacing: 0.2em; }
+/* Grouped code on screen (4 + 4). */
+.code-display {
+  direction: ltr;
+  unicode-bidi: isolate;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.12em;
+  word-spacing: 0.3em;
 }
 
-/* ---------- scroll reveal ---------- */
+/* ---------- entrance motion ---------- */
+/* Above the fold: plain CSS, so the first paint never waits for JavaScript. */
+.rise {
+  animation: rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* Below the fold: revealed by IntersectionObserver (components/Reveal). */
 .reveal {
   opacity: 0;
-  transform: translateY(26px);
-  transition: opacity 0.75s cubic-bezier(0.22, 1, 0.36, 1),
-    transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+  transform: translateY(24px);
+  transition:
+    opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .reveal.is-in { opacity: 1; transform: none; }
+/* Without JavaScript nothing would ever flip is-in, so never hide. (<noscript> in the layout
+   covers browsers that do not know this media feature.) */
+@media (scripting: none) {
+  .reveal { opacity: 1; transform: none; }
+}
 
-/* ---------- tilt card ---------- */
-.tilt { transform-style: preserve-3d; transition: transform 0.35s ease; }
-.tilt:hover { transform: perspective(900px) rotateX(3deg) rotateY(-4deg) translateY(-6px); }
+.bar {
+  transform-origin: bottom;
+  animation: grow 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--d, 0ms);
+}
+
+/* Below-the-fold sections are skipped by layout and paint until they approach the viewport. */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 720px;
+}
+
+/* ---------- hover tilt (pointer devices only) ---------- */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .tilt { transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+  .tilt:hover { transform: translateY(-5px); }
+}
+
+/* ---------- marquee ---------- */
+.marquee {
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee 48s linear infinite;
+}
+[dir="rtl"] .marquee-track { animation-name: marquee-rtl; }
+/* Pausing on hover and focus lets people read a name that is moving. */
+.marquee:hover .marquee-track,
+.marquee:focus-within .marquee-track { animation-play-state: paused; }
+
+/* ---------- mobile menu ----------
+   One surface, one path: it grows from the menu button and returns to it. The closing easing is
+   the mirror (inverse control points) of the opening one. */
+.menu-scrim,
+.menu-panel {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 180ms cubic-bezier(0.64, 0, 0.78, 0),
+    scale 200ms cubic-bezier(0.64, 0, 0.78, 0),
+    visibility 0s linear 200ms;
+}
+.menu-panel {
+  scale: 0.9;
+  transform-origin: calc(100% - 2rem) 0;
+}
+[dir="rtl"] .menu-panel { transform-origin: 2rem 0; }
+.menu-open .menu-scrim,
+.menu-open .menu-panel {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    scale 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s;
+}
+.menu-open .menu-panel { scale: 1; }
 
 /* ---------- utility bits ---------- */
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-::selection { background: #ff6b1a; color: #fff; }
-
+/* ---------- user preferences ---------- */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+  html { scroll-behavior: auto; }
+  /* Cross-fade instead of slide or spring: keep the cue, drop the movement. The attribute match also
+     covers variant classes such as lg:animate-float, which a plain .animate-float selector misses. */
+  [class*="animate-float"],
+  [class*="animate-steam"],
+  .mesh::before,
+  .mesh::after { animation: none; }
+  .rise { animation-name: fade-in; animation-duration: 0.3s; }
+  .reveal { transform: none; transition: opacity 0.3s ease; }
+  .bar { animation-name: fade-in; animation-duration: 0.3s; }
+  .tilt:hover { transform: none; }
+  .press { transition: opacity 150ms ease, background-color 150ms ease, border-color 150ms ease, color 150ms ease; }
+  .press:active:not(:disabled, [aria-disabled="true"]) { scale: 1; opacity: 0.75; }
+  .menu-panel { scale: 1; }
+  .menu-scrim,
+  .menu-panel,
+  .menu-open .menu-scrim,
+  .menu-open .menu-panel { transition: opacity 150ms ease, visibility 0s linear 150ms; }
+  .menu-open .menu-scrim,
+  .menu-open .menu-panel { transition: opacity 150ms ease, visibility 0s; }
+  /* A moving strip becomes a plain scrollable row. */
+  .marquee { overflow-x: auto; mask-image: none; }
+  .marquee-track { animation: none; width: auto; }
+  .marquee-track > [aria-hidden="true"] { display: none; }
+  body { transition: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass,
+  .glass-blur { background: var(--c-bg-2); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .scrim { background: var(--c-bg); }
+}
+
+@media (prefers-contrast: more) {
+  :root,
+  .dark {
+    --c-line: color-mix(in srgb, var(--c-ink) 60%, transparent);
+    --c-muted: color-mix(in srgb, var(--c-ink) 82%, var(--c-bg));
   }
-  .reveal { opacity: 1; transform: none; }
+  .glass,
+  .glass-blur { background: var(--c-bg-2); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .scrim { background: var(--c-bg); }
+  .mesh,
+  .grid-lines { display: none; }
 }

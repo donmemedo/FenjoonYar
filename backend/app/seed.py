@@ -1,6 +1,11 @@
+import logging
+
 from sqlmodel import Session, select
 
 from .models import Cafe, Plan, User
+
+log = logging.getLogger("cups.seed")
+DEMO_PARTNER = "09120000000"
 
 PLANS = [
     dict(slug="taste-5", kind="package", title_fa="بسته ۵ فنجانی", title_en="5 Cup Pack",
@@ -68,7 +73,7 @@ CAFES = [
 ]
 
 
-def seed(session: Session) -> None:
+def seed(session: Session, demo: bool = False) -> None:
     if not session.exec(select(Plan)).first():
         for p in PLANS:
             session.add(Plan(**p))
@@ -83,10 +88,17 @@ def seed(session: Session) -> None:
             )
     session.commit()
 
-    # Demo partner account bound to the first cafe (login: 09120000000).
-    if not session.exec(select(User).where(User.phone == "09120000000")).first():
-        cafe = session.exec(select(Cafe).where(Cafe.slug == "noghte")).first()
-        session.add(
-            User(phone="09120000000", name="کافه نقطه", role="partner", cafe_id=cafe.id)
-        )
-        session.commit()
+    # Demo partner bound to the first cafe (login: 09120000000). Only with DEMO_MODE=1: a known
+    # phone number must never be a privileged account in a real deployment.
+    known = session.exec(select(User).where(User.phone == DEMO_PARTNER)).first()
+    if demo:
+        cafe_id = session.exec(select(Cafe.id).where(Cafe.slug == "noghte")).one()
+        if known is None:
+            session.add(User(phone=DEMO_PARTNER, name="کافه نقطه", role="partner", cafe_id=cafe_id))
+        else:
+            known.role, known.cafe_id = "partner", cafe_id
+    elif known is not None and (known.role != "customer" or known.cafe_id is not None):
+        # The first release seeded this partner in every environment: strip it on upgrade.
+        known.role, known.cafe_id = "customer", None
+        log.warning("seed: demoted the demo partner %s (DEMO_MODE=0)", known.id)
+    session.commit()
